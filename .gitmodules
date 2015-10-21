@@ -1,0 +1,6 @@
+[submodule "phagios"]
+	path = phagios
+	url = https://github.com/hannesbe/phagios.git
+[submodule "ahsay-api-wrapper"]
+	path = ahsay-api-wrapper
+	url = https://github.com/hannesbe/php-ahsay-api-wrapper.git
