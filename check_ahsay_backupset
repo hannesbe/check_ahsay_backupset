@@ -7,27 +7,36 @@ class checkAhsayBackupsetPlugin extends Phagios
 {
     protected $pluginTimeZone = 'Europe/Brussels';
     protected $pluginName = 'check_ahsay_backupset';
-    protected $pluginVersion = '1.0.0';
+    protected $pluginVersion = '1.1.0';
     protected $pluginVersionInfo = '
     $configPluginName - $configPluginVersion
     (c) 2015 Hannes Van de Vel - Connexeon
 
     ';
     protected $pluginOpts;
-    protected $pluginShortOpts = 'u:b:s:d:e:';
+    protected $pluginShortOpts = 'H:l:a:u:b:s:d:e:z:';
     protected $pluginLongOpts = array(
+        'hostname:',
+        'logname:',
+        'authentication:',
         'user:',
         'backupset-id:',
         'schedule:',
         'due-time:',
-        'estimated-job-duration', );
+        'estimated-job-duration',
+        'timezone:', );
+
     protected $pluginUsage =
         '
         Usage:
-        check_ahsay_backupset -u <user-name> -b <backupset-id>
+        check_ahsay_backupset -H <hostname>
+        -l <adminusername> -a <adminpassword>
+        -u <username> -b <backupset-id>
         -s <5x1|7x1|7x6|7x12|7x24|7x30>
-        [-d <0-24h|0-59m>] [-e <hours>] [-v]
+        [-d <0-24h|0-59m>] [-e <hours>]
+        [-z <timezone>] [-v|vv|vvv]
         ';
+
     protected $pluginHelp = "
         Options:
         -h, --help
@@ -36,50 +45,62 @@ class checkAhsayBackupsetPlugin extends Phagios
         -v, --verbose
         Verbose output
 
+        -H, --hostname
+        Ahsay server hostname
 
-        -u, --user-name
-        Ahsay username (case sensitive)
+        -l, --logname
+        Ahsay admin username (case sensitive)
+
+        -a, --authentication
+        Ahsay admin password
+
+        -u, --username
+        Ahsay username of backupset to check (case sensitive)
 
         -b, --backupset-id
         Ahsay backupset ID (**not** the name, the numeric ID)
 
         -s, --schedule
-        Backup schedule (to determine the backup is fresh enough)
+        Backup schedule (to determine the backup freshness)
         Options:
-        5x1  :   1 backup every 24h except weekends
-        7x1  :   1 backup every 24h
-        7x6  :   6 backups every day
-        7x12 :  84 backups every day
-        7x24 : 168 backups every day
-        7x30 : 210 backups every day
+        5x1  :   1 backup  every 24h except weekends
+        7x1  :   1 backup  every 24h
+        7x6  :   6 backups every 24h
+        7x12 :  84 backups every 24h
+        7x24 : 168 backups every 24h
+        7x30 : 210 backups every 24h
 
         -d, --due-time
+        Optional.
         Indicates the time the backup is due, used to determine when to alert.
 
         - for schedules running once a day or less (5x1 or 7x1)
 
-        0-23h : the hour of the day the backup is due
-        examples: 10h = 10am each day, 18h = 6pm each day
-        only for schedules running once per day or less (5x1 or 7x1).
-        Defaults to 10h when provided schedule is 5x1 or 7x1
+            0-23h : the hour of the day the backup is due.
+            For schedules running once per day or less (5x1 or 7x1).
+            Defaults to 10h for schedule 5x1 or 7x1.
+            Examples: 10h = 10am each day, 18h = 6pm each day.
 
         - for schedules running more than once per day,
-        but less than once per hour (7x6, 7x12)
+          but less than once per hour (7x6, 7x12)
 
-        0-23h : the hour of the day the first backup of the day is due
-        defaults to 2h for 7x12 and to 4h for 7x6
-        examples: 2h = 2am each day, 0h = midnight each day
+            0-23h : the hour of the day the first backup of the day is due.
+            Defaults to 2h for schedule 7x12 and to 4h for schedule 7x6.
+            Examples: 2h = 2am each day, 0h = midnight each day
 
         - for schedules running once per hour or more (7x24 or 7x30)
 
-        0-59m : the minute of the hour the first backup of the day is due
-        defaults to 15m for 7x24 and 7x30
-        example: 10m = xx:10 every hour
+            0-59m : the minute of the hour the first backup of the day is due.
+            Defaults to 15m for 7x24 and 7x30.
+            Example: 10m = xx:10 every hour.
 
         -e, --estimated-job-duration
-        The duration in hours the backup job is expected to run. Used to
+        Optional duration in hours the backup job is expected to run. Used to
         warn if the backup is running late (before it's due) and to move the
         time due when it's known the backup is known to run longer.
+
+        -t, --timezone
+        Optional timezone string. Defaults to 'Europe/Brussels'.
         ";
 
     public function __construct($pluginOpts = array())
@@ -88,11 +109,6 @@ class checkAhsayBackupsetPlugin extends Phagios
     }
     protected function runChecks()
     {
-        define('BACKUPSERVER_HOST', 'bs1.connexeon.net');
-        define('BACKUPSERVER_PORT', '80');
-        define('BACKUPSERVER_USER', 'admin');
-        define('BACKUPSERVER_PASSWORD', 'Iuvx8YLBtShQCyOGEK9R');
-
         define('SCHEDULE_5x1', 5);
         define('SCHEDULE_7x1', 7);
         define('SCHEDULE_7x6', 42);
@@ -100,27 +116,47 @@ class checkAhsayBackupsetPlugin extends Phagios
         define('SCHEDULE_7x24', 168);
         define('SCHEDULE_7x30', 210);
 
-        $this->debugOutput('Initialising backup API', 1);
-            // Connect to OBS using these login details
-            $api = new AhsayApiWrapper(BACKUPSERVER_HOST, BACKUPSERVER_PORT, BACKUPSERVER_USER, BACKUPSERVER_PASSWORD);
+        $hostname = '';
+        $logname = '';
+        $authentication = '';
 
-        if ($this->verbosity >= 2) {
+        if (isset($this->pluginOpts['H'])) {
+            $hostname = $this->pluginOpts['H'];
+            $this->debugOutput('--hostname, -H arg: '.$hostname, self::VERBOSE_ADDITIONAL);
+        }
+
+        if (isset($this->pluginOpts['l'])) {
+            $logname = $this->pluginOpts['l'];
+            $this->debugOutput('--logname; -l arg: '.$logname, self::VERBOSE_ADDITIONAL);
+        }
+
+        if (isset($this->pluginOpts['a'])) {
+            $authentication = $this->pluginOpts['a'];
+            $this->debugOutput('--authentication, -a arg: '.$authentication, self::VERBOSE_ADDITIONAL);
+        }
+
+        $this->debugOutput('Initialising backup API
+        Address        : '.$hostname.'
+        Admin user     : '.$logname.'
+        Admin password : '.$authentication, self::VERBOSE_ADDITIONAL);
+
+        // Connect to OBS using these login details
+        $api = new AhsayApiWrapper($hostname, $logname, $authentication);
+
+        if ($this->verbosity >= self::VERBOSE_DEBUG) {
             $api->debug(true);
         }
 
-        $this->debugOutput('Evaluating username', 1);
         if (isset($this->pluginOpts['u'])) {
             $user = $this->pluginOpts['u'];
-            $this->debugOutput('Username present: '.$user, 1);
+            $this->debugOutput('--username, -u arg: '.$user, self::VERBOSE_ADDITIONAL);
         }
 
-        $this->debugOutput('Evaluating backup set', 1);
         if (isset($this->pluginOpts['b'])) {
             $backupSet = $this->pluginOpts['b'];
-            $this->debugOutput('Backup set present: '.$backupSet, 1);
+            $this->debugOutput('--backupset, -b arg: '.$backupSet, self::VERBOSE_ADDITIONAL);
         }
 
-        $this->debugOutput('Evaluating schedule', 1);
         if (isset($this->pluginOpts['s'])) {
             switch ($this->pluginOpts['s']) {
                     case '5x1':  $schedule = SCHEDULE_5x1;  $defaultDueTime = 10; break;
@@ -137,11 +173,11 @@ class checkAhsayBackupsetPlugin extends Phagios
             throw new PhagiosCriticalException(
                 'No backup schedule specified');
         }
-        $this->debugOutput('Schedule ok: '.$schedule, 1);
+        $this->debugOutput('--schedule, -s arg: '.$schedule, self::VERBOSE_ADDITIONAL);
 
-        $this->debugOutput('Evaluating due time', 1);
         if (!isset($this->pluginOpts['d'])) {
             $dueTime = $defaultDueTime;
+            $this->debugOutput('--duetime, -d arg: not set. Default: '.$dueTime, self::VERBOSE_ADDITIONAL);
         } else {
             $this->pluginOpts['d'] = strtolower($this->pluginOpts['d']);
             $dueTimeUnit = (substr($this->pluginOpts['d'], -1));
@@ -150,57 +186,59 @@ class checkAhsayBackupsetPlugin extends Phagios
                     case 'm':
                     if ($schedule < 168) {
                         throw new PhagiosCritcalException(
-                        'CRITICAL - option -d: due time in minutes is only allowed for schedules running at least once per day');
+                        'option -d: due time in minutes is only allowed for schedules running at least once per day');
                     }
                     $dueTime = intval(rtrim($this->pluginOpts['d'], 'm'));
                     if (!($dueTime >= 0 && $dueTime <= 59)) {
                         throw new PhagiosCriticalException(
-                        'CRITICAL - option -d: due time in minutes must have a value between 0 and 59');
+                        'option -d: due time in minutes must have a value between 0 and 59');
                     }
                     break;
 
                     case 'h':
                     if ($schedule >= 168) {
-                        throw new PhagiosCriticalException('CRITICAL - option -d: due time in hours is only valid for schedules running at once per day or less');
+                        throw new PhagiosCriticalException('option -d: due time in hours is only valid for schedules running at once per day or less');
                     }
                     $dueTime = intval(rtrim($this->pluginOpts['d'], 'h'));
 
                     if (!($dueTime >= 0 && $dueTime <= 23)) {
-                        throw new PhagiosCriticalException('CRITICAL - option -d: due time in hours must have a value between 0 and 23');
+                        throw new PhagiosCriticalException('option -d: due time in hours must have a value between 0 and 23');
                     }
                     break;
 
                     default:
-                    throw new PhagiosCriticalException('CRITICAL - option -d: invalid due time unit. Include h or m (hours / minutes), for example 10h or 15m');
+                    throw new PhagiosCriticalException('option -d: invalid due time unit. Include h or m (hours / minutes), for example 10h or 15m');
                     break;
 
                 }
-            $this->debugOutput('Due time ok: '.$dueTime.$dueTimeUnit, 1);
+            $this->debugOutput('--duetime, -d arg: '.$dueTime.$dueTimeUnit, self::VERBOSE_ADDITIONAL);
         }
-
-        $this->debugOutput('Evaluating Estimated job duration', 1);
 
         if (!isset($this->pluginOpts['e'])) {
             $estimatedJobDurationHours = 1;
+            $this->debugOutput('--estimated-job-duration, -e arg: not set. Default: '.$estimatedJobDurationHours, self::VERBOSE_ADDITIONAL);
         } else {
             $estimatedJobDurationHours = intval($this->pluginOpts['e']);
+            $this->debugOutput('--estimated-job-duration, -e arg: '.$estimatedJobDurationHours, self::VERBOSE_ADDITIONAL);
         }
 
         if (!($estimatedJobDurationHours)) {
             throw new PhagiosCriticalException(
                 'option -e: invalid value. Should be numeric');
         }
-        $this->debugOutput('Estimated job duration ok: '.$estimatedJobDurationHours.' hours', 1);
 
         $lastJobObject = $api->getMostRecentBackupJob($user, $backupSet);
-        $lastJobDetailObject = $api->getUserBackupJobDetails($user, $backupSet, $lastJobObject)['@attributes'];
-            //$jobDetailAttr = $jobDetail['@attributes'];
+        if ($lastJobObject == false) {
+            throw new PhagiosCriticalException(
+                "No backup jobs found for user $user, backupset $backupSet");
+        }
+        $lastJobDetailObject = $api->getUserBackupJobDetails($user, $backupSet, $lastJobObject);
 
-            $lastJobStartTime = date_create($lastJobDetailObject['StartTime']);
+        $lastJobStartTime = date_create($lastJobDetailObject['StartTime']);
         $lastJobEndTime = date_create($lastJobDetailObject['EndTime']);
         $lastJobStatusCode = $lastJobDetailObject['BackupJobStatus'];
         $lastJobSizeUncompressed = $lastJobDetailObject['TotalUnzipNewFilesSize'] + $lastJobDetailObject['TotalUnzipUpdatedFilesSize'];
-        $this->debugOutput(print_r($lastJobDetailObject, true), 2);
+        $this->debugOutput(print_r($lastJobDetailObject->attributes(), true), self::VERBOSE_DEBUG);
 
             //        var_dump($lastJobDetailObject, true);
             if (!strcmp($lastJobStatusCode, 'BS_STOP_SUCCESS')) {
@@ -239,12 +277,12 @@ class checkAhsayBackupsetPlugin extends Phagios
             Start   : '.$lastJobStartTime->format('Y-m-d H:i:s').'
             End     : '.$lastJobEndTime->format('Y-m-d H:i:s').'
             Status  : '.$lastJobStatus.'
-            Size    : '.$api->formatBytes($lastJobSizeUncompressed, 0), 1);
+            Size    : '.$api->formatBytes($lastJobSizeUncompressed, 0), self::VERBOSE_ADDITIONAL);
 
         $currentTime = date_create();
         $lastAge = date_diff(($lastJobStartTime), $currentTime);
 
-        $this->debugOutput('Backup age: '.$lastAge->format('%h hours %i mins'), 1);
+        $this->debugOutput('Backup age: '.$lastAge->format('%h hours %i mins'), self::VERBOSE_ADDITIONAL);
 
         $lastJobWeekDay = $lastJobStartTime->format('w');
         $currentWeekDay = $currentTime->format('w');
@@ -280,12 +318,13 @@ class checkAhsayBackupsetPlugin extends Phagios
 
                 if ($lastJobWeekDay == 7) {
                     // If the last backup was on a Saturday (Friday after midnight), the next is only due 48 hours later than on a weekday
+                    $this->debugOutput("It's Saturday, so counting 48h extra in cycle ", self::VERBOSE_ADDITIONAL);
                     $jobCycleHours += 48;
                 }
                 //
                 if ($lastJobWeekDay == 0) {
                     // It's Sunday and for some reason there was taken a backup today. Deadline to next backup is calculated with last backup date as a reference, so we need to adjust the deadline.
-                    $this->debugOutput("It's sunday, so counting 24h extra in cycle ", 1);
+                    $this->debugOutput("It's Sunday, so counting 24h extra in cycle ", self::VERBOSE_ADDITIONAL);
                     $jobCycleHours += 24;
                 }
                 if ($lastJobWeekDay == 1) {
@@ -350,7 +389,7 @@ class checkAhsayBackupsetPlugin extends Phagios
 
                 default:
                 // error: unknown backup schedule so cannot tell when backup is due.
-                throw new PhagiosCriticalException('Unknown backup schedule. Cannot determine of backup is fresh enough');
+                throw new PhagiosCriticalException('Unknown backup schedule. Cannot determine backup freshness.');
             }
 
         $this->debugOutput('
@@ -359,19 +398,21 @@ class checkAhsayBackupsetPlugin extends Phagios
             dueTime              : $dueTime
             nextJobStartTime     : ".$nextJobStartTime->format('Y-m-d H:i:s').'
             nextJobDueTime       : '.$nextJobDueTime->format('Y-m-d H:i:s').'
-            nextJobEstimatedTime : '.$nextJobEstimatedTime->format('Y-m-d H:i:s'), 1);
+            nextJobEstimatedTime : '.$nextJobEstimatedTime->format('Y-m-d H:i:s'), self::VERBOSE_ADDITIONAL);
 
         $periodToNextJobDue = $nextJobDueTime->diff($currentTime);
             // When a backupcycle has passed, an early warning is given if the backup did not yet start. This is our smoke detector.
-            $hoursToNextJobStartOverdue = (($estimatedJobDurationHours * 60) / 5);
+
+        $hoursToNextJobStartOverdue = (($estimatedJobDurationHours * 60) / 5);
             // (backupcycle hours + 1/5 of expected duration extra, should be running now).
-            $nextJobStartOverDueTime = clone $nextJobStartTime;
+
+        $nextJobStartOverDueTime = clone $nextJobStartTime;
         $nextJobStartOverDueTime->modify("+$hoursToNextJobStartOverdue minutes");
             //$nextJobStartOverDueTime = $lastJobStartTime;
 
             $this->debugOutput("
             hoursToNextJobStartOverdue : $hoursToNextJobStartOverdue m
-            nextJobStartOverDueTime    : ".$nextJobStartOverDueTime->format('Y-m-d H:i:s'), 1);
+            nextJobStartOverDueTime    : ".$nextJobStartOverDueTime->format('Y-m-d H:i:s'), self::VERBOSE_ADDITIONAL);
 
         $return = '';
         $warning = false;
@@ -400,7 +441,7 @@ class checkAhsayBackupsetPlugin extends Phagios
                 default:
                 throw new PhagiosCriticalException('Last backup failed ('.$lastJobStatus.') at '.$lastJobEndTime->format('d/m H:i').'.');
             }
-        $this->debugOutput('Next backup due in '.$periodToNextJobDue->format('%hh %im'), 1);
+        $this->debugOutput('Next backup due in '.$periodToNextJobDue->format('%hh %im'), self::VERBOSE_ADDITIONAL);
 
         if ($currentTime < $nextJobDueTime) {
             $return .= ' Expires in '.$periodToNextJobDue->format('%dd %hh %im').'.';
