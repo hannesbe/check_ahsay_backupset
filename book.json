@@ -1,6 +1,7 @@
 {
     "plugins": [
-        "easyheightlight"
+        "easyheightlight",
+        "light-it"
     ],
     "pluginsConfig": {}
 }
