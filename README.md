@@ -11,7 +11,6 @@ Icinga(2)/Nagios plugin to check Ahsay backup status and freshness
 - [Phagios 0.1.0+](https://github.com/hannesbe/phagios)
 - [php-ahsay-api-wrapper 1.2+](https://github.com/hannesbe/php-ahsay-api-wrapper)
 
-[i] tezzar
 
 ## License
 [![GitHub license](https://img.shields.io/github/license/hannesbe/check_ahsay_backupset.svg)](https://raw.githubusercontent.com/hannesbe/check_ahsay_backupset/master/LICENSE)
